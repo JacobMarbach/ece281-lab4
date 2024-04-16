@@ -104,7 +104,7 @@ architecture top_basys3_arch of top_basys3 is
                i_reset   : in  STD_LOGIC;
                i_stop    : in  STD_LOGIC;
                i_up_down : in  STD_LOGIC;
-               o_floor   : out STD_LOGIC_VECTOR (3 downto 0)           
+               o_floor   : out STD_LOGIC_VECTOR (7 downto 0)           
              );
     end component elevator_controller_fsm;
    
@@ -112,45 +112,82 @@ architecture top_basys3_arch of top_basys3 is
         generic ( constant k_DIV : natural := 2    ); -- How many clk cycles until slow clock toggles
                                                    -- Effectively, you divide the clk double this 
                                                    -- number (e.g., k_DIV := 2 --> clock divider of 4)
-        port (     i_clk    : in std_logic;
+        port (  i_clk    : in std_logic;
                 i_reset  : in std_logic;           -- asynchronous
                 o_clk    : out std_logic           -- divided (slow) clock
         );
     end component clock_divider;
     
-    signal s_stop, s_up_down, s_master_reset, s_fsm_reset, s_clk_reset, w_clk : std_logic := '0';
-    signal s_floor, w_7SD_EN_n : std_logic_vector(3 downto 0) := "0000";
-    signal o_Signal : std_logic_vector(6 downto 0);
+    component TDM4 is
+        generic ( constant k_WIDTH : natural  := 4); -- bits in input and output
+            Port ( i_clk        : in  STD_LOGIC;
+                   i_reset      : in  STD_LOGIC; -- asynchronous
+                   i_D3         : in  STD_LOGIC_VECTOR (k_WIDTH - 1 downto 0);
+                   i_D2         : in  STD_LOGIC_VECTOR (k_WIDTH - 1 downto 0);
+                   i_D1         : in  STD_LOGIC_VECTOR (k_WIDTH - 1 downto 0);
+                   i_D0         : in  STD_LOGIC_VECTOR (k_WIDTH - 1 downto 0);
+                   o_data       : out STD_LOGIC_VECTOR (k_WIDTH - 1 downto 0);
+                   o_sel        : out STD_LOGIC_VECTOR (3 downto 0)    -- selected data line (one-cold)
+            );
+    end component TDM4;
+
+    constant k_IO_WIDTH : natural := 4;
+    
+    signal w_clk1, w_clk2 : std_logic := '0';
+    signal s_floor : std_logic_vector(7 downto 0) := "00000000";
+    signal s_data : std_logic_vector(3 downto 0) := "0000";
+    
 begin
 	-- PORT MAPS ----------------------------------------
 
 	sevenSegDecoder_inst : sevenSegDecoder
 	   port map(
-	       i_D => s_floor,
+	       i_D => s_data,
 	       o_S => seg
 	   );
     
     elevator_controller_inst : elevator_controller_fsm
         port map(
-            i_clk     => w_clk,
+            i_clk     => w_clk1,
             i_reset   => btnU or btnR,
             i_stop    => sw(0),
             i_up_down => sw(1),
             o_floor   => s_floor          
         );
     
-    clock_divider_inst : clock_divider
+    clock_divider_inst1 : clock_divider
         generic map ( k_DIV => 25000000)
         port map (
             i_clk => clk,
             i_reset => btnL or btnU,
-            o_clk => w_clk
+            o_clk => w_clk1
         );
 	
+	clock_divider_inst2 : clock_divider
+        generic map ( k_DIV => 280000)
+        port map (
+            i_clk => clk,
+            i_reset => btnL or btnU,
+            o_clk => w_clk2
+        );
+        
+    TDM4_inst : TDM4
+        generic map ( k_WIDTH => k_IO_WIDTH )
+        port map (
+            i_clk   => w_clk2,
+            i_reset => btnU,
+            i_D3    => s_floor(7 downto 4),
+            i_D2    => s_floor(3 downto 0),
+            i_D1    => "0000",
+            i_D0    => "0000",
+            o_data  => s_data,
+            o_sel   => an
+        );
+        
 	-- CONCURRENT STATEMENTS ----------------------------
 	
 	-- LED 15 gets the FSM slow clock signal. The rest are grounded.
-	led(15) <= w_clk;
+	led(15) <= w_clk1;
 	led(14) <= '0';
 	led(13) <= '0';
     led(12) <= '0';
@@ -169,10 +206,7 @@ begin
 	-- leave unused switches UNCONNECTED. Ignore any warnings this causes.
 	
 	-- wire up active-low 7SD anodes (an) as required
-	an(0) <= '1';
-	an(1) <= '1';
-	an(2) <= '0';
-	an(3) <= '1';
+	
 	
 	-- Tie any unused anodes to power ('1') to keep them off
 	
